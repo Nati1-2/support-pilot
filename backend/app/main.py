@@ -84,6 +84,17 @@ app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(followups.router, prefix=settings.API_V1_STR)
 app.include_router(products.router, prefix=settings.API_V1_STR)
 
+@app.get("/api")
+@app.get("/api/")
+async def api_root():
+    return {
+        "status": "online",
+        "name": settings.PROJECT_NAME,
+        "version": settings.VERSION,
+        "health": "/api/health",
+        "docs": "/docs"
+    }
+
 @app.get("/api/health")
 async def health_check():
     return {

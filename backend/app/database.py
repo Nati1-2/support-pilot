@@ -269,7 +269,10 @@ class AsyncMockCollection:
 
 class AsyncMockMotorDatabase:
     def __init__(self, data_file: str = "backend/data/store.json"):
-        self.data_file = data_file
+        if os.environ.get("VERCEL"):
+            self.data_file = "/tmp/store.json"
+        else:
+            self.data_file = data_file
         self.collections: Dict[str, AsyncMockCollection] = {}
         self._load()
 
