@@ -1,0 +1,12 @@
+{
+  "name": "supportpilot-ai-platform",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "build": "cd frontend && npm install && npm run build",
+    "dev": "npm run dev --prefix frontend",
+    "start": "bash start.sh",
+    "test": "env MONGODB_URI= GEMINI_API_KEY= backend/venv/bin/python3 -u -m backend.tests.test_backend && env MONGODB_URI= GEMINI_API_KEY= backend/venv/bin/python3 -u -m backend.tests.test_srs_acceptance",
+    "verify": "npm test && npm run build"
+  }
+}

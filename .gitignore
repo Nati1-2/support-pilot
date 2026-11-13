@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Node / Frontend
+frontend/node_modules/
+node_modules/
+.npm
+frontend/dist/
+.vite/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Local persisted demo/test data
+backend/data/*.json
+tmp/
+
+# Local Codex/workspace metadata
+.agents/
+.aws/
+.codex/
+
+# Vercel
+.vercel
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
