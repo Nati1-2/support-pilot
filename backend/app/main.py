@@ -105,7 +105,9 @@ async def health_check():
     }
 
 # Mount static frontend build if present
-dist_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+dist_dir = os.path.join(os.path.dirname(__file__), "..", "..", "dist")
+if not os.path.exists(dist_dir):
+    dist_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
 if os.path.exists(dist_dir):
     assets_dir = os.path.join(dist_dir, "assets")
     if os.path.exists(assets_dir):

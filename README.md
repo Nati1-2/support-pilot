@@ -120,7 +120,7 @@ The application is now live at **`http://localhost:8000`**!
 backend/venv/bin/python3 -m uvicorn backend.app.main:app --port 8000 --ws none
 
 # Terminal 2: Frontend with HMR
-npm run dev --prefix frontend
+npm run dev
 ```
 Visit **`http://localhost:5173`** for instant frontend hot-module reloading.
 
