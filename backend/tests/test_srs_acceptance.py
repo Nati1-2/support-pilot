@@ -202,7 +202,7 @@ async def run_tests():
             )).status_code == 404
         finally:
             settings.DEMO_MODE = original_demo_mode
-        checkpoint("production demo accounts disabled")
+        checkpoint("demo-account disable switch")
 
         rate_headers = {"X-Real-IP": "203.0.113.30"}
         for _ in range(settings.AUTH_RATE_LIMIT_REQUESTS):

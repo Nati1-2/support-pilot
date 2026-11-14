@@ -10,7 +10,9 @@ import {
 import { Button } from '../components/common/Button';
 import { useAuth, DemoRole } from '../context/AuthContext';
 
-const DEMO_MODE = import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true';
+// Keep one-click demo logins available in deployed builds unless an operator
+// explicitly turns them off with VITE_DEMO_MODE=false.
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE !== 'false';
 
 export const Login: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess }) => {
   // Mode: 'signin' | 'signup'

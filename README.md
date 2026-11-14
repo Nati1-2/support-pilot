@@ -147,7 +147,7 @@ Replace the MongoDB URI and all three secrets. `GEMINI_API_KEY` is optional. In 
 
 MongoDB Atlas is required for durable data on Vercel because a serverless function's local `/tmp` storage is temporary. Allow network access from Vercel in the Atlas network settings.
 
-Production deployments fail closed if MongoDB or any required secret is missing. Demo accounts are disabled by default on Vercel, CORS is limited to configured origins, and login/registration requests are rate limited. Only set both `DEMO_MODE=true` and `VITE_DEMO_MODE=true` for an intentional non-production demonstration.
+Production deployments fail closed if MongoDB or any required secret is missing. Demo accounts remain available on Vercel, CORS is limited to configured origins, and login/registration requests are rate limited. Set both `DEMO_MODE=false` and `VITE_DEMO_MODE=false` only if you want to disable demo access later.
 
 ### Deploy
 
@@ -169,7 +169,7 @@ https://YOUR-PROJECT.vercel.app/api/health
 
 ## 8. Local Demo Accounts & 1-Click Login
 
-During local development, SupportPilot AI features dedicated **1-Click Demo Logins** directly on the sign-in screen and an in-app **Role Switcher** in the top navigation header. These known credentials are blocked and hidden in production by default:
+SupportPilot AI features dedicated **1-Click Demo Logins** directly on the sign-in screen and an in-app **Role Switcher** in the top navigation header. They remain enabled in the Vercel deployment:
 
 | Role | Demo User | Email | Password | Scope & Privileges |
 | :--- | :--- | :--- | :--- | :--- |

@@ -14,9 +14,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     DUMMYJSON_ENABLED: bool = os.getenv("DUMMYJSON_ENABLED", "true").lower() in {"1", "true", "yes"}
-    DEMO_MODE: bool = os.getenv(
-        "DEMO_MODE", "false" if os.getenv("VERCEL") else "true"
-    ).lower() in {"1", "true", "yes"}
+    DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() in {"1", "true", "yes"}
 
     # Security
     JWT_SECRET: str = os.getenv("JWT_SECRET", "supportpilot_jwt_super_secret_key_v2_2026")
