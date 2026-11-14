@@ -126,7 +126,46 @@ Visit **`http://localhost:5173`** for instant frontend hot-module reloading.
 
 ---
 
-## 7. Demo Accounts & 1-Click Login
+## 7. Deploy Frontend + Backend Together on Vercel
+
+This repository is one Vercel project:
+
+- Vite builds the frontend into `dist/` and Vercel serves it at `/`.
+- `api/index.py` exposes the FastAPI backend as one Python function at `/api/*`.
+- `vercel.json` keeps API rewrites ahead of the React SPA fallback and registers the hourly follow-up cron.
+- The browser uses the same-origin `/api` URL, so no separate frontend URL or CORS environment variable is required.
+
+### Environment
+
+Use one environment file for both sides:
+
+```bash
+cp .env.example .env
+```
+
+Replace the MongoDB URI and all three secrets. `GEMINI_API_KEY` is optional. In Vercel, import the same variables from `.env.example` into **Project Settings → Environment Variables** for Production, Preview, and Development. Do not commit `.env`.
+
+MongoDB Atlas is required for durable data on Vercel because a serverless function's local `/tmp` storage is temporary. Allow network access from Vercel in the Atlas network settings.
+
+### Deploy
+
+Import the repository into Vercel with the repository root as the **Root Directory**. The committed configuration already sets the build command and output directory, so no second Vercel project is needed. You can also deploy from the root with:
+
+```bash
+npx vercel
+npx vercel --prod
+```
+
+After deployment, verify these URLs on the same domain:
+
+```text
+https://YOUR-PROJECT.vercel.app/
+https://YOUR-PROJECT.vercel.app/api/health
+```
+
+---
+
+## 8. Demo Accounts & 1-Click Login
 
 SupportPilot AI features dedicated **1-Click Demo Logins** directly on the sign-in screen and an in-app **Role Switcher** in the top navigation header:
 
@@ -141,7 +180,7 @@ SupportPilot AI features dedicated **1-Click Demo Logins** directly on the sign-
 
 ---
 
-## 8. Running the Backend Test Suite
+## 9. Running the Backend Test Suite
 
 The comprehensive backend integration test suite validates authentication, guardrails, $50 credit caps, pre-dispatch address locks, PII redaction, and proactive webhooks:
 

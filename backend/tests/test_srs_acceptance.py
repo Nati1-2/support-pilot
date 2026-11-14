@@ -150,8 +150,8 @@ async def run_tests():
             json={"ticket_id": created["id"], "reason": "SRS due follow-up", "due_at": due},
         )
         assert scheduled.status_code == 200
-        assert (await client.post("/api/followups/process-due")).status_code == 401
-        processed = await client.post(
+        assert (await client.get("/api/followups/process-due")).status_code == 401
+        processed = await client.get(
             "/api/followups/process-due",
             headers={"Authorization": f"Bearer {settings.CRON_SECRET}"},
         )

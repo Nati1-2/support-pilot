@@ -72,7 +72,7 @@ async def schedule_followup(
     return row
 
 
-@router.post("/process-due")
+@router.api_route("/process-due", methods=["GET", "POST"])
 async def process_due_followups(_: None = Depends(verify_cron_request)):
     now = datetime.utcnow()
     now_iso = now.isoformat()

@@ -269,7 +269,9 @@ class AsyncMockCollection:
 
 class AsyncMockMotorDatabase:
     def __init__(self, data_file: str = "backend/data/store.json"):
-        if os.environ.get("VERCEL"):
+        if os.environ.get("MOCK_DATABASE_PATH"):
+            self.data_file = os.environ["MOCK_DATABASE_PATH"]
+        elif os.environ.get("VERCEL"):
             self.data_file = "/tmp/store.json"
         else:
             self.data_file = data_file
