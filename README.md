@@ -167,6 +167,27 @@ https://YOUR-PROJECT.vercel.app/api/health
 
 ---
 
+### CI/CD (GitHub Actions)
+
+`.github/workflows/ci-cd.yml` runs on every push and pull request:
+
+| Job | What it does |
+| :--- | :--- |
+| **Backend tests** | Installs `requirements.txt`, compile-checks the code, runs `npm test` (integration + SRS acceptance suites, fully offline). |
+| **Frontend** | `npm ci`, TypeScript type-check, production Vite build. |
+| **Deploy** | Only on `main`, only after both jobs pass: `vercel pull` → `vercel build --prod` → `vercel deploy --prebuilt --prod`, then `scripts/smoke_test.py` against production (fails if Atlas, webhook or cron secrets are missing). |
+
+One-time setup in GitHub → **Settings → Secrets and variables → Actions**:
+
+- Secrets: `VERCEL_TOKEN` (vercel.com/account/tokens), `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` (from `.vercel/project.json` after running `npx vercel link`).
+- Optional variable: `PRODUCTION_URL` (defaults to the current production URL).
+
+Until the secrets exist, the deploy job is skipped with a warning and CI still runs. Once deploys from Actions work, add `"git": { "deploymentEnabled": false }` to `vercel.json` so Vercel stops deploying untested commits on its own.
+
+Run the smoke test manually at any time: `npm run smoke -- https://YOUR-PROJECT.vercel.app` (add `SMOKE_AI=1` to include one live AI request).
+
+---
+
 ## 8. Local Demo Accounts & 1-Click Login
 
 SupportPilot AI features dedicated **1-Click Demo Logins** directly on the sign-in screen and an in-app **Role Switcher** in the top navigation header. They remain enabled in the Vercel deployment:

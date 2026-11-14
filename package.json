@@ -11,8 +11,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "start": "bash start.sh",
-    "test": "MONGODB_URI= GEMINI_API_KEY= DUMMYJSON_ENABLED=false DEMO_MODE=true MOCK_DATABASE_PATH=/tmp/supportpilot-ai-test-store.json backend/venv/bin/python3 -m backend.tests.test_backend && MONGODB_URI= GEMINI_API_KEY= DUMMYJSON_ENABLED=false DEMO_MODE=true MOCK_DATABASE_PATH=/tmp/supportpilot-ai-test-store.json backend/venv/bin/python3 -m backend.tests.test_srs_acceptance",
-    "verify": "npm run build && npm test"
+    "test": "rm -f /tmp/supportpilot-ai-test-store.json && MONGODB_URI= GEMINI_API_KEY= DUMMYJSON_ENABLED=false DEMO_MODE=true MOCK_DATABASE_PATH=/tmp/supportpilot-ai-test-store.json ${PYTHON:-backend/venv/bin/python3} -m backend.tests.test_backend && MONGODB_URI= GEMINI_API_KEY= DUMMYJSON_ENABLED=false DEMO_MODE=true MOCK_DATABASE_PATH=/tmp/supportpilot-ai-test-store.json ${PYTHON:-backend/venv/bin/python3} -m backend.tests.test_srs_acceptance",
+    "verify": "npm run build && npm test",
+    "typecheck": "tsc --noEmit",
+    "smoke": "${PYTHON:-backend/venv/bin/python3} scripts/smoke_test.py"
   },
   "dependencies": {
     "clsx": "^2.1.1",
