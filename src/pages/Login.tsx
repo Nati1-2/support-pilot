@@ -10,13 +10,15 @@ import {
 import { Button } from '../components/common/Button';
 import { useAuth, DemoRole } from '../context/AuthContext';
 
+const DEMO_MODE = import.meta.env.DEV || import.meta.env.VITE_DEMO_MODE === 'true';
+
 export const Login: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess }) => {
   // Mode: 'signin' | 'signup'
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
 
   // Sign In credentials
-  const [email, setEmail] = useState('admin@aerowear.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState(DEMO_MODE ? 'admin@aerowear.com' : '');
+  const [password, setPassword] = useState(DEMO_MODE ? 'admin123' : '');
   const [selectedDemo, setSelectedDemo] = useState<DemoRole>('admin');
 
   // Sign Up fields (default user only: Name, Email, Password)
@@ -273,7 +275,7 @@ export const Login: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess
         )}
 
         {/* ===================== DEMO ACCOUNT ROLE PILLS (MATCHING SCREENSHOT) ===================== */}
-        <div className="pt-2">
+        {DEMO_MODE && <div className="pt-2">
           {/* Divider */}
           <div className="relative my-3">
             <div className="absolute inset-0 flex items-center">
@@ -358,7 +360,7 @@ export const Login: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess
               </button>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Card Security Footnote */}
         <div className="pt-3 border-t border-neutral-100 flex items-center justify-center gap-1.5 text-[11px] text-neutral-400">

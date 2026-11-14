@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
+from collections import defaultdict, deque
 import os
 import time
 
@@ -36,17 +37,52 @@ app = FastAPI(
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 _initialized = False
+_auth_requests = defaultdict(deque)
+
+
+def _rate_limit_key(request: Request) -> str:
+    client_ip = request.headers.get("x-real-ip")
+    if not client_ip:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded.split(",", 1)[0].strip() if forwarded else ""
+    if not client_ip and request.client:
+        client_ip = request.client.host
+    return client_ip or "unknown"
+
+
+def _auth_rate_limit_response(request: Request):
+    if request.method != "POST" or request.url.path not in {
+        "/api/auth/login",
+        "/api/auth/register",
+    }:
+        return None
+
+    now = time.monotonic()
+    window = settings.AUTH_RATE_LIMIT_WINDOW_SECONDS
+    bucket = _auth_requests[_rate_limit_key(request)]
+    while bucket and now - bucket[0] >= window:
+        bucket.popleft()
+    if len(bucket) >= settings.AUTH_RATE_LIMIT_REQUESTS:
+        retry_after = max(1, int(window - (now - bucket[0])))
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many authentication attempts. Please try again later."},
+            headers={"Retry-After": str(retry_after)},
+        )
+    bucket.append(now)
+    return None
 
 async def ensure_initialized():
     global _initialized
     if not _initialized:
+        settings.validate_vercel_runtime()
         await db_manager.connect()
         await seed_initial_data()
         _initialized = True
@@ -59,12 +95,19 @@ async def startup_event():
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
+    rate_limited = _auth_rate_limit_response(request)
+    if rate_limited:
+        return rate_limited
     # Ensure database connection on serverless cold starts
     await ensure_initialized()
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = f"{process_time:.4f}s"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
 
 # Register API Routers
@@ -100,7 +143,7 @@ async def health_check():
     return {
         "status": "healthy",
         "version": settings.VERSION,
-        "database": "Atlas" if db_manager.is_atlas else "MockMotor (persisted)",
+        "database": "Atlas" if db_manager.is_atlas else ("MockMotor (ephemeral)" if os.getenv("VERCEL") else "MockMotor (persisted)"),
         "gemini_mode": "Live" if settings.GEMINI_API_KEY else "Simulated Guardrail Engine"
     }
 

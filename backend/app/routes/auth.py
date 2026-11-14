@@ -1,12 +1,19 @@
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from backend.app.database import get_collection
 from backend.app.models.user import UserCreate, UserLogin, TokenResponse, UserOut
 from backend.app.services.auth_service import hash_password, verify_password, create_access_token, get_current_user
 from backend.app.config import settings
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+DEMO_EMAILS = {
+    "admin@aerowear.com",
+    "sarah.support@aerowear.com",
+    "viewer@aerowear.com",
+    "customer@aerowear.com",
+}
 
 @router.post("/register", response_model=TokenResponse)
 async def register(user_in: UserCreate):
@@ -64,6 +71,9 @@ async def register(user_in: UserCreate):
 
 @router.post("/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
+    if not settings.DEMO_MODE and credentials.email.lower() in DEMO_EMAILS:
+        raise HTTPException(status_code=403, detail="Demo accounts are disabled")
+
     users_col = get_collection("users")
     user = await users_col.find_one({"email": credentials.email})
     if not user or not verify_password(credentials.password, user.get("hashed_password", "")):
@@ -85,6 +95,9 @@ async def login(credentials: UserLogin):
 
 @router.post("/demo/{role}", response_model=TokenResponse)
 async def demo_login(role: str):
+    if not settings.DEMO_MODE:
+        raise HTTPException(status_code=404, detail="Not found")
+
     role_email_map = {
         "admin": "admin@aerowear.com",
         "agent": "sarah.support@aerowear.com",

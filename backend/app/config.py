@@ -14,11 +14,19 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     DUMMYJSON_ENABLED: bool = os.getenv("DUMMYJSON_ENABLED", "true").lower() in {"1", "true", "yes"}
+    DEMO_MODE: bool = os.getenv(
+        "DEMO_MODE", "false" if os.getenv("VERCEL") else "true"
+    ).lower() in {"1", "true", "yes"}
 
     # Security
     JWT_SECRET: str = os.getenv("JWT_SECRET", "supportpilot_jwt_super_secret_key_v2_2026")
     WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "supportpilot_webhook_secret_v2_2026")
     CRON_SECRET: str = os.getenv("CRON_SECRET", "supportpilot_cron_secret_v2_2026")
+    ALLOWED_ORIGINS: str = os.getenv(
+        "ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    )
+    AUTH_RATE_LIMIT_REQUESTS: int = int(os.getenv("AUTH_RATE_LIMIT_REQUESTS", "10"))
+    AUTH_RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60"))
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
 
@@ -31,5 +39,39 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "allow"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    def validate_vercel_runtime(self) -> None:
+        """Refuse to start an insecure or non-persistent Vercel deployment."""
+        if not os.getenv("VERCEL"):
+            return
+
+        defaults = {
+            "JWT_SECRET": "supportpilot_jwt_super_secret_key_v2_2026",
+            "WEBHOOK_SECRET": "supportpilot_webhook_secret_v2_2026",
+            "CRON_SECRET": "supportpilot_cron_secret_v2_2026",
+        }
+        invalid = [
+            name
+            for name, default in defaults.items()
+            if (
+                not getattr(self, name)
+                or getattr(self, name) == default
+                or getattr(self, name).startswith("REPLACE_WITH")
+                or len(getattr(self, name)) < 32
+            )
+        ]
+        if (
+            not self.MONGODB_URI.startswith(("mongodb://", "mongodb+srv://"))
+            or "USERNAME:PASSWORD@HOST" in self.MONGODB_URI
+        ):
+            invalid.append("MONGODB_URI")
+        if invalid:
+            raise RuntimeError(
+                "Missing secure Vercel environment variables: " + ", ".join(sorted(invalid))
+            )
 
 settings = Settings()

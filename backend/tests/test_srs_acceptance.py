@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
@@ -143,7 +143,7 @@ async def run_tests():
         assert payment.status_code == 200 and payment.json()["ticket_id"]
         checkpoint("signed idempotent webhooks")
 
-        due = (datetime.utcnow() - timedelta(minutes=1)).isoformat()
+        due = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)).isoformat()
         scheduled = await client.post(
             "/api/followups",
             headers=agent,
@@ -186,6 +186,57 @@ async def run_tests():
         assert (await client.get("/api/orders", headers=registered_headers)).json() == []
         assert (await client.get("/api/overview/metrics", headers=registered_headers)).status_code == 403
         checkpoint("public registration role enforcement")
+
+        original_demo_mode = settings.DEMO_MODE
+        settings.DEMO_MODE = False
+        try:
+            disabled_demo_login = await client.post(
+                "/api/auth/login",
+                headers={"X-Real-IP": "203.0.113.20"},
+                json={"email": "admin@aerowear.com", "password": "admin123"},
+            )
+            assert disabled_demo_login.status_code == 403
+            assert (await client.post(
+                "/api/auth/demo/admin",
+                headers={"X-Real-IP": "203.0.113.20"},
+            )).status_code == 404
+        finally:
+            settings.DEMO_MODE = original_demo_mode
+        checkpoint("production demo accounts disabled")
+
+        rate_headers = {"X-Real-IP": "203.0.113.30"}
+        for _ in range(settings.AUTH_RATE_LIMIT_REQUESTS):
+            attempt = await client.post(
+                "/api/auth/login",
+                headers=rate_headers,
+                json={"email": "missing@example.com", "password": "incorrect"},
+            )
+            assert attempt.status_code == 401
+        throttled = await client.post(
+            "/api/auth/login",
+            headers=rate_headers,
+            json={"email": "missing@example.com", "password": "incorrect"},
+        )
+        assert throttled.status_code == 429 and throttled.headers.get("retry-after")
+        checkpoint("authentication rate limiting")
+
+        cors_preflight = await client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert cors_preflight.headers.get("access-control-allow-origin") == "http://localhost:5173"
+        blocked_origin = await client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": "https://malicious.example",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert "access-control-allow-origin" not in blocked_origin.headers
+        checkpoint("restricted CORS")
 
     print("ALL SRS ACCEPTANCE TESTS PASSED")
 
