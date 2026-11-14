@@ -61,8 +61,6 @@ interface AuthContextType {
     email: string;
     password: string;
     full_name: string;
-    role?: string;
-    workspace_name?: string;
   }) => Promise<void>;
   loginAsDemo: (role: DemoRole) => Promise<void>;
   switchDemoUser: (role: DemoRole) => Promise<void>;
@@ -107,8 +105,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     email: string;
     password: string;
     full_name: string;
-    role?: string;
-    workspace_name?: string;
   }) => {
     const res = await api.register(data);
     localStorage.setItem('supportpilot_token', res.access_token);

@@ -32,14 +32,17 @@ async def run_tests():
             "full_name": "Marcus Vance",
             "email": test_email,
             "password": "password123",
-            "workspace_name": "AeroWear Goods",
-            "role": "agent"
+            # Public callers must not be able to grant themselves privileges.
+            "workspace_name": "Attacker Workspace",
+            "role": "admin"
         })
         print("Register status:", register_res.status_code)
         assert register_res.status_code == 200
         reg_data = register_res.json()
         assert reg_data["user"]["email"] == test_email
-        assert reg_data["user"]["role"] == "agent"
+        assert reg_data["user"]["role"] == "customer"
+        assert reg_data["user"]["workspace_id"] == "ws_aerowear_prod"
+        assert reg_data["user"]["customer_id"]
         assert "access_token" in reg_data
 
         print("\n--- 4. Testing Overview Metrics ---")

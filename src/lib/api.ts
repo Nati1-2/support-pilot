@@ -65,8 +65,6 @@ class ApiClient {
     email: string;
     password: string;
     full_name: string;
-    role?: string;
-    workspace_name?: string;
   }): Promise<{ access_token: string; user: User }> {
     return this.request('/auth/register', {
       method: 'POST',

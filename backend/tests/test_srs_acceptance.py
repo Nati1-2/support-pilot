@@ -171,16 +171,21 @@ async def run_tests():
             pass
         checkpoint("strict Gemini schema")
 
-        isolated_email = f"isolated-{uuid.uuid4().hex[:8]}@example.com"
-        isolated = await client.post(
+        registered_email = f"registered-{uuid.uuid4().hex[:8]}@example.com"
+        registered = await client.post(
             "/api/auth/register",
-            json={"full_name": "Isolated Agent", "email": isolated_email, "password": "password123", "workspace_name": f"Isolated {uuid.uuid4().hex[:6]}", "role": "agent"},
+            json={"full_name": "Registered User", "email": registered_email, "password": "password123", "workspace_name": "Injected Workspace", "role": "admin"},
         )
-        assert isolated.status_code == 200
-        isolated_headers = {"Authorization": f"Bearer {isolated.json()['access_token']}"}
-        assert (await client.get("/api/tickets", headers=isolated_headers)).json() == []
-        assert (await client.get("/api/orders", headers=isolated_headers)).json() == []
-        checkpoint("workspace isolation")
+        assert registered.status_code == 200
+        registered_user = registered.json()["user"]
+        assert registered_user["role"] == "customer"
+        assert registered_user["workspace_id"] == settings.DEFAULT_WORKSPACE_ID
+        assert registered_user["customer_id"]
+        registered_headers = {"Authorization": f"Bearer {registered.json()['access_token']}"}
+        assert (await client.get("/api/tickets", headers=registered_headers)).json() == []
+        assert (await client.get("/api/orders", headers=registered_headers)).json() == []
+        assert (await client.get("/api/overview/metrics", headers=registered_headers)).status_code == 403
+        checkpoint("public registration role enforcement")
 
     print("ALL SRS ACCEPTANCE TESTS PASSED")
 

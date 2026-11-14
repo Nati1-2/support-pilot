@@ -72,13 +72,11 @@ export const Login: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess
 
     try {
       setLoadingRole('signup');
-      // Create default user in standard workspace
+      // Public registration always creates a customer/user account.
       await register({
         full_name: signupName.trim(),
         email: signupEmail.trim(),
         password: signupPassword,
-        workspace_name: 'AeroWear Goods',
-        role: 'agent',
       });
       onLoginSuccess();
     } catch (err: any) {
@@ -113,7 +111,7 @@ export const Login: React.FC<{ onLoginSuccess: () => void }> = ({ onLoginSuccess
           <p className="text-xs text-neutral-500 mt-1">
             {authMode === 'signin'
               ? 'Enter your credentials to access your support dashboard.'
-              : 'Sign up for a default user account to start automating customer support.'}
+              : 'Sign up for a customer account to contact support and track your requests.'}
           </p>
         </div>
 

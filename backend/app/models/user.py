@@ -5,17 +5,14 @@ from datetime import datetime
 class UserBase(BaseModel):
     email: str
     full_name: str
-    role: str = "agent"  # admin, agent, viewer
+    role: str = "customer"  # admin, agent, viewer, customer
     workspace_id: str
     customer_id: Optional[str] = None
 
 class UserCreate(BaseModel):
     email: str
-    password: str
-    full_name: str
-    role: str = "agent"
-    workspace_id: Optional[str] = None
-    workspace_name: Optional[str] = None
+    password: str = Field(min_length=6)
+    full_name: str = Field(min_length=1, max_length=120)
 
 class UserLogin(BaseModel):
     email: str

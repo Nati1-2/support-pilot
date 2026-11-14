@@ -15,45 +15,38 @@ async def register(user_in: UserCreate):
     if existing:
         raise HTTPException(status_code=400, detail="User with this email already exists")
 
-    ws_id = user_in.workspace_id or settings.DEFAULT_WORKSPACE_ID
-
-    # If custom workspace requested and not the default AeroWear workspace
-    if user_in.workspace_name and not user_in.workspace_id and user_in.workspace_name.strip().lower() not in ("aerowear goods", "aerowear goods (production)", "aerowear"):
-        ws_id = f"ws_{uuid.uuid4().hex[:8]}"
-        ws_col = get_collection("workspaces")
-        await ws_col.insert_one({
-            "_id": ws_id,
-            "name": user_in.workspace_name.strip(),
-            "slug": user_in.workspace_name.lower().replace(" ", "-"),
-            "settings": {
-                "confidence_threshold": settings.CONFIDENCE_THRESHOLD,
-                "store_credit_max_cap": settings.STORE_CREDIT_MAX_CAP,
-                "auto_pilot_enabled": True,
-                "delay_compensation_credit": 15.0,
-                "gemini_model": "gemini-2.5-flash",
-                "simulated_carrier": "FedEx Express"
-            },
-            "created_at": datetime.utcnow()
-        })
-        # Copy standard policies to the new workspace so RAG and guardrails are operational
-        policies_col = get_collection("policy_sections")
-        default_policies = await policies_col.find({"workspace_id": settings.DEFAULT_WORKSPACE_ID}).to_list(100)
-        for p in default_policies:
-            p_copy = dict(p)
-            p_copy["_id"] = f"pol_{uuid.uuid4().hex[:8]}"
-            p_copy["workspace_id"] = ws_id
-            await policies_col.insert_one(p_copy)
-
+    # Public registration is intentionally least-privileged. Roles and workspace
+    # membership are server-controlled and cannot be selected by the request.
+    ws_id = settings.DEFAULT_WORKSPACE_ID
     user_id = f"usr_{uuid.uuid4().hex[:8]}"
-    requested_role = user_in.role if user_in.role in ("agent", "customer") else "agent"
+    customer_id = f"cust_{uuid.uuid4().hex[:8]}"
+    created_at = datetime.utcnow()
+
+    await get_collection("customers").insert_one({
+        "_id": customer_id,
+        "workspace_id": ws_id,
+        "name": user_in.full_name.strip(),
+        "email": user_in.email,
+        "phone": None,
+        "total_spent": 0.0,
+        "orders_count": 0,
+        "average_order_value": 0.0,
+        "sentiment_score": 0.5,
+        "is_vip": False,
+        "tags": ["registered_user"],
+        "notes": None,
+        "created_at": created_at,
+    })
+
     new_user = {
         "_id": user_id,
         "email": user_in.email,
-        "full_name": user_in.full_name,
-        "role": requested_role,
+        "full_name": user_in.full_name.strip(),
+        "role": "customer",
         "workspace_id": ws_id,
+        "customer_id": customer_id,
         "hashed_password": hash_password(user_in.password),
-        "created_at": datetime.utcnow()
+        "created_at": created_at,
     }
     await users_col.insert_one(new_user)
 
@@ -61,10 +54,10 @@ async def register(user_in: UserCreate):
     user_out = UserOut(
         id=user_id,
         email=user_in.email,
-        full_name=user_in.full_name,
+        full_name=new_user["full_name"],
         role=new_user["role"],
         workspace_id=ws_id,
-        customer_id=new_user.get("customer_id"),
+        customer_id=customer_id,
         created_at=new_user["created_at"]
     )
     return TokenResponse(access_token=token, token_type="bearer", user=user_out)
@@ -83,7 +76,7 @@ async def login(credentials: UserLogin):
         id=user_id,
         email=user["email"],
         full_name=user["full_name"],
-        role=user.get("role", "agent"),
+        role=user.get("role", "customer"),
         workspace_id=user.get("workspace_id", settings.DEFAULT_WORKSPACE_ID),
         customer_id=user.get("customer_id"),
         created_at=user.get("created_at", datetime.utcnow())
@@ -113,7 +106,7 @@ async def demo_login(role: str):
         id=user_id,
         email=user["email"],
         full_name=user["full_name"],
-        role=user.get("role", "agent"),
+        role=user.get("role", "customer"),
         workspace_id=user.get("workspace_id", settings.DEFAULT_WORKSPACE_ID),
         customer_id=user.get("customer_id"),
         created_at=user.get("created_at", datetime.utcnow())
@@ -126,7 +119,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         id=str(current_user["_id"]),
         email=current_user["email"],
         full_name=current_user["full_name"],
-        role=current_user.get("role", "agent"),
+        role=current_user.get("role", "customer"),
         workspace_id=current_user.get("workspace_id", settings.DEFAULT_WORKSPACE_ID),
         customer_id=current_user.get("customer_id"),
         created_at=current_user.get("created_at", datetime.utcnow())
