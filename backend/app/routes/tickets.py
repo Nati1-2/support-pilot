@@ -1,4 +1,5 @@
 import uuid
+import logging
 from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +9,7 @@ from backend.app.services.agent_service import agent_service
 from backend.app.models.ticket import TicketCreate, MessageCreate
 
 router = APIRouter(prefix="/tickets", tags=["Tickets & Conversations"])
+logger = logging.getLogger(__name__)
 
 @router.get("")
 async def list_tickets(
@@ -213,6 +215,9 @@ async def add_message(
     if role == "customer" and ticket.get("customer_id") != current_user.get("customer_id"):
         raise HTTPException(status_code=404, detail="Ticket not found")
 
+    if not message_in.content.strip():
+        raise HTTPException(status_code=422, detail="Please enter a message")
+
     messages_col = get_collection("messages")
     msg_id = f"msg_{uuid.uuid4().hex[:8]}"
     now = datetime.utcnow()
@@ -231,11 +236,74 @@ async def add_message(
     }
     await messages_col.insert_one(new_msg)
 
-    # Update ticket updated_at
+    # Reopen a resolved conversation while its new customer message is handled.
     await tickets_col.update_one(
-        {"_id": ticket_id},
-        {"$set": {"updated_at": now}}
+        {"_id": ticket_id, "workspace_id": workspace_id},
+        {"$set": {"updated_at": now, **({"status": "open"} if role == "customer" else {})}}
     )
+
+    if role == "customer":
+        try:
+            history = await messages_col.find({
+                "ticket_id": ticket_id, "workspace_id": workspace_id,
+                "_id": {"$ne": msg_id},
+            }).sort("created_at", -1).to_list(length=10)
+            result = await agent_service.process_inquiry(
+                workspace_id=workspace_id,
+                customer_id=ticket["customer_id"],
+                message_content=message_in.content.strip(),
+                order_id=ticket.get("order_id"),
+                existing_ticket_id=ticket_id,
+                channel=ticket.get("channel", "portal"),
+                conversation_history="\n".join(
+                    f"{row['sender_type']}: {row['content'][:2000]}" for row in reversed(history)
+                ),
+            )
+            citations = [c.model_dump() for c in result.get("citations", [])]
+            needs_review = result["requires_approval"] or result["ticket_status"] != "resolved"
+            await tickets_col.update_one(
+                {"_id": ticket_id, "workspace_id": workspace_id},
+                {"$set": {
+                    "status": "needs_approval" if needs_review else "resolved",
+                    "requires_approval": needs_review,
+                    "ai_draft_reply": result["draft_reply"] if needs_review else None,
+                    "ai_confidence": result["confidence_score"],
+                    "intent": result["intent"], "sentiment": result["sentiment"],
+                    "priority": result["urgency"], "urgency": result["urgency"],
+                    "vip_churn_risk": result["vip_churn_risk"],
+                    "citations": citations,
+                    "proposed_action": result["proposed_action"].model_dump() if result.get("proposed_action") else None,
+                    "escalation_summary": result["escalation_summary"].model_dump() if result.get("escalation_summary") else None,
+                    "updated_at": datetime.utcnow(),
+                }},
+            )
+            response_content = (
+                "Thanks for your message. A support agent needs to review your request. Their reply will appear here."
+                if needs_review else result["draft_reply"]
+            )
+            response_type = "system" if needs_review else "ai"
+        except Exception:
+            logger.exception("Could not generate follow-up response for ticket %s", ticket_id)
+            # The message is already saved. Queue it and acknowledge receipt so
+            # the customer does not resend and duplicate their request.
+            await tickets_col.update_one(
+                {"_id": ticket_id, "workspace_id": workspace_id},
+                {"$set": {"status": "open", "requires_approval": False,
+                          "ai_draft_reply": None, "proposed_action": None,
+                          "updated_at": datetime.utcnow()}},
+            )
+            response_content = "Your message has been saved. The automatic assistant is unavailable, so a support agent will follow up here."
+            response_type = "system"
+            citations = []
+
+        await messages_col.insert_one({
+            "_id": f"msg_{uuid.uuid4().hex[:8]}",
+            "workspace_id": workspace_id, "ticket_id": ticket_id,
+            "sender_type": response_type, "sender_name": "SupportPilot AI" if response_type == "ai" else "SupportPilot Support",
+            "content": response_content,
+            "citations": citations if response_type == "ai" else [],
+            "created_at": datetime.utcnow(),
+        })
 
     new_msg["id"] = msg_id
     return new_msg

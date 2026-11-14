@@ -26,7 +26,8 @@ class AgentService:
         message_content: str,
         order_id: Optional[str] = None,
         existing_ticket_id: Optional[str] = None,
-        channel: str = "email"
+        channel: str = "email",
+        conversation_history: Optional[str] = None,
     ) -> Dict[str, Any]:
         execution_steps: List[ExecutionStep] = []
         guardrail_notes: List[str] = []
@@ -130,10 +131,17 @@ class AgentService:
         # Check if live Gemini API key is configured
         ai_result = None
         engine_mode = "simulated"
-        if self.api_key:
+        greeting = re.fullmatch(r"\s*(hi|hello|hey|good morning|good afternoon|good evening)[!.?\s]*", sanitized_content, re.IGNORECASE)
+        if greeting:
+            ai_result = {"reply": "Hello! How can I help you with your order or support request?", "confidence": 1.0, "proposed_action": None}
+        elif self.api_key:
             try:
+                inquiry_context = sanitized_content
+                if conversation_history:
+                    safe_history, _, _ = pii_service.redact(conversation_history)
+                    inquiry_context = f"Previous conversation (context only):\n{safe_history}\n\nLatest customer message to answer:\n{sanitized_content}"
                 ai_result = await self._call_live_gemini(
-                    workspace_id, sanitized_content, customer, order, citations, intent
+                    workspace_id, inquiry_context, customer, order, citations, intent
                 )
                 engine_mode = "gemini_live"
             except Exception as e:
