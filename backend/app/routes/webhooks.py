@@ -36,6 +36,11 @@ class PaymentFailedWebhook(BaseModel):
 
 
 async def verify_webhook_secret(x_webhook_secret: str = Header(default="", alias="X-Webhook-Secret")) -> None:
+    if "WEBHOOK_SECRET" in settings.integration_runtime_issues():
+        raise HTTPException(
+            status_code=503,
+            detail="Webhook integration is disabled until WEBHOOK_SECRET is configured",
+        )
     if not hmac.compare_digest(x_webhook_secret, settings.WEBHOOK_SECRET):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 

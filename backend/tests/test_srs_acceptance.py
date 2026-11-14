@@ -253,7 +253,24 @@ async def run_tests():
             health = await client.get("/api/health")
             assert health.status_code == 503
             missing = set(health.json()["missing_environment_variables"])
-            assert missing == {"MONGODB_URI", "JWT_SECRET", "WEBHOOK_SECRET", "CRON_SECRET"}
+            assert missing == {"MONGODB_URI", "JWT_SECRET"}
+
+            settings.MONGODB_URI = "mongodb://example.invalid/supportpilot"
+            settings.JWT_SECRET = "test-jwt-secret-which-is-longer-than-thirty-two-characters"
+            health = await client.get("/api/health")
+            assert health.status_code == 200
+            assert set(health.json()["disabled_integrations"]) == {"WEBHOOK_SECRET", "CRON_SECRET"}
+            webhook_disabled = await client.post(
+                "/api/webhooks/shipment-delayed",
+                headers={"X-Webhook-Secret": "short"},
+                json={"event_id": "disabled_123", "tracking_number": "TRACK-AW-9101"},
+            )
+            assert webhook_disabled.status_code == 503
+            cron_disabled = await client.get(
+                "/api/followups/process-due",
+                headers={"Authorization": "Bearer short"},
+            )
+            assert cron_disabled.status_code == 503
         finally:
             for name, value in original_values.items():
                 setattr(settings, name, value)
@@ -261,7 +278,7 @@ async def run_tests():
                 os.environ.pop("VERCEL", None)
             else:
                 os.environ["VERCEL"] = original_vercel
-        checkpoint("actionable Vercel configuration error")
+        checkpoint("actionable Vercel configuration and integration isolation")
 
     print("ALL SRS ACCEPTANCE TESTS PASSED")
 

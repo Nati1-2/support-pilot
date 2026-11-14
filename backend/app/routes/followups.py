@@ -24,6 +24,11 @@ async def verify_cron_request(
     authorization: str = Header(default=""),
     x_cron_secret: str = Header(default="", alias="X-Cron-Secret"),
 ) -> None:
+    if "CRON_SECRET" in settings.integration_runtime_issues():
+        raise HTTPException(
+            status_code=503,
+            detail="Scheduled follow-ups are disabled until CRON_SECRET is configured",
+        )
     bearer = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if not (
         hmac.compare_digest(bearer, settings.CRON_SECRET)

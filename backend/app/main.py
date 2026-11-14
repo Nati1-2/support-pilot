@@ -166,12 +166,16 @@ async def health_check():
             },
         )
     await ensure_initialized()
-    return {
+    health = {
         "status": "healthy",
         "version": settings.VERSION,
         "database": "Atlas" if db_manager.is_atlas else ("MockMotor (ephemeral)" if os.getenv("VERCEL") else "MockMotor (persisted)"),
         "gemini_mode": "Live" if settings.GEMINI_API_KEY else "Simulated Guardrail Engine"
     }
+    disabled_integrations = settings.integration_runtime_issues()
+    if disabled_integrations:
+        health["disabled_integrations"] = disabled_integrations
+    return health
 
 # Mount static frontend build if present
 dist_dir = os.path.join(os.path.dirname(__file__), "..", "..", "dist")

@@ -43,14 +43,12 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     def vercel_runtime_issues(self) -> list[str]:
-        """Return missing production settings without exposing their values."""
+        """Return critical settings that must exist before the app can start."""
         if not os.getenv("VERCEL"):
             return []
 
         defaults = {
             "JWT_SECRET": "supportpilot_jwt_super_secret_key_v2_2026",
-            "WEBHOOK_SECRET": "supportpilot_webhook_secret_v2_2026",
-            "CRON_SECRET": "supportpilot_cron_secret_v2_2026",
         }
         invalid = [
             name
@@ -68,6 +66,25 @@ class Settings(BaseSettings):
         ):
             invalid.append("MONGODB_URI")
         return sorted(set(invalid))
+
+    def integration_runtime_issues(self) -> list[str]:
+        """Return optional integrations disabled by absent secure credentials."""
+        if not os.getenv("VERCEL"):
+            return []
+        defaults = {
+            "WEBHOOK_SECRET": "supportpilot_webhook_secret_v2_2026",
+            "CRON_SECRET": "supportpilot_cron_secret_v2_2026",
+        }
+        return sorted(
+            name
+            for name, default in defaults.items()
+            if (
+                not getattr(self, name)
+                or getattr(self, name) == default
+                or getattr(self, name).startswith("REPLACE_WITH")
+                or len(getattr(self, name)) < 32
+            )
+        )
 
     def validate_vercel_runtime(self) -> None:
         """Refuse to start an insecure or non-persistent Vercel deployment."""
