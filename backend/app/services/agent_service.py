@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import uuid
 from typing import Dict, Any, List, Optional, Tuple
@@ -14,10 +15,93 @@ from backend.app.services.idempotency_service import idempotency_service
 from backend.app.models.ticket import PolicyCitation, ProposedAction, EscalationSummary, GeminiAgentResult
 from backend.app.models.audit import AuditTrace, ExecutionStep
 
+ALLOWED_ACTION_TYPES = [
+    "update_shipping_address",
+    "issue_store_credit",
+    "generate_rma_label",
+    "escalate_ticket",
+]
+
+# Constrains Gemini's structured output so it cannot invent unsupported actions
+# or arbitrary parameter keys (OpenAPI subset accepted by the Gemini API).
+GEMINI_RESPONSE_SCHEMA: Dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "reply": {"type": "STRING"},
+        "confidence": {"type": "NUMBER"},
+        "proposed_action": {
+            "type": "OBJECT",
+            "nullable": True,
+            "properties": {
+                "action_type": {"type": "STRING", "enum": ALLOWED_ACTION_TYPES},
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "amount": {"type": "NUMBER", "nullable": True},
+                        "reason": {"type": "STRING", "nullable": True},
+                        "shipping_address": {
+                            "type": "OBJECT",
+                            "nullable": True,
+                            "properties": {
+                                "street": {"type": "STRING"},
+                                "city": {"type": "STRING"},
+                                "state": {"type": "STRING"},
+                                "zip_code": {"type": "STRING"},
+                                "country": {"type": "STRING"},
+                            },
+                            "required": ["street", "city", "state", "zip_code", "country"],
+                        },
+                    },
+                },
+            },
+            "required": ["action_type", "parameters"],
+        },
+    },
+    "required": ["reply", "confidence", "proposed_action"],
+}
+
+# HTTP statuses that justify trying the next model instead of giving up.
+_RETRYABLE_STATUSES = {404, 408, 429, 500, 502, 503, 504}
+
+
+class GeminiUnavailable(Exception):
+    """Raised when every configured Gemini model failed for this request."""
+
+
+def _strip_nulls(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _strip_nulls(v) for k, v in value.items() if v is not None}
+    return value
+
+
+def _short_error(resp: httpx.Response) -> str:
+    try:
+        err = resp.json().get("error", {})
+        status = err.get("status") or resp.status_code
+        message = str(err.get("message", "")).split("\n")[0][:160]
+        return f"{status}: {message}" if message else str(status)
+    except Exception:
+        return f"HTTP {resp.status_code}"
+
+
 class AgentService:
     def __init__(self):
         self.api_key = settings.GEMINI_API_KEY
         self.model = settings.GEMINI_MODEL
+        # Process-local diagnostics surfaced by /api/agent/status.
+        self.last_live_error: Optional[str] = None
+        self.last_live_error_at: Optional[datetime] = None
+        self.last_live_model: Optional[str] = None
+
+    def candidate_models(self, preferred: Optional[str] = None) -> List[str]:
+        models: List[str] = []
+        for name in [preferred, self.model, *settings.gemini_fallback_models]:
+            name = (name or "").strip()
+            if name.startswith("models/"):
+                name = name[len("models/"):]
+            if name and name not in models:
+                models.append(name)
+        return models
 
     async def process_inquiry(
         self,
@@ -60,23 +144,28 @@ class AgentService:
         is_vip = customer.get("total_spent", 0.0) >= settings.VIP_SPENT_THRESHOLD
 
         # Step 3: Order Investigation (by order_id or parsed from message)
+        # Orders are always scoped to this customer so a message that mentions
+        # someone else's order number can never read or act on that order.
         orders_col = get_collection("orders")
         order = None
         if order_id:
-            order = await orders_col.find_one({"_id": order_id, "workspace_id": workspace_id})
+            order = await orders_col.find_one({
+                "_id": order_id, "workspace_id": workspace_id, "customer_id": customer_id
+            })
 
         if not order:
-            # Try to extract order number from text, e.g. ORD-1092 or #1092
-            order_match = re.search(r'\b(?:ORD-?|#)?(\d{4,6})\b', sanitized_content, re.IGNORECASE)
-            if order_match:
-                digits = order_match.group(1)
+            # Try to extract order numbers from text, e.g. ORD-1092 or #1092
+            for digits in re.findall(r'(?:ORD-?|#)?\b(\d{4,6})\b', sanitized_content, re.IGNORECASE):
                 order = await orders_col.find_one({
                     "workspace_id": workspace_id,
+                    "customer_id": customer_id,
                     "$or": [
                         {"order_number": f"ORD-{digits}"},
                         {"order_number": digits}
                     ]
                 })
+                if order:
+                    break
 
         # If still no specific order, fetch latest customer order
         if not order:
@@ -115,7 +204,12 @@ class AgentService:
 
         # Step 5: Policy RAG Retrieval
         rag_query = f"{intent} {sanitized_content}"
-        citations = await rag_service.search_policies(workspace_id, rag_query, limit=2)
+        citations = await rag_service.search_policies(workspace_id, rag_query, limit=2, intent=intent)
+        if is_vip_churn_risk and not any("VIP" in c.title for c in citations):
+            vip_policy = await rag_service.search_policies(
+                workspace_id, "vip churn_risk escalation", limit=1, intent="vip_churn_risk"
+            )
+            citations = (citations[:1] + vip_policy) if vip_policy else citations
         policy_ids = [c.section_id for c in citations]
         execution_steps.append(ExecutionStep(
             step_name="policy_retrieval",
@@ -129,41 +223,6 @@ class AgentService:
 
         # Step 6: Generate Response & Determine Proposed Action
         # Check if live Gemini API key is configured
-        ai_result = None
-        engine_mode = "simulated"
-        greeting = re.fullmatch(r"\s*(hi|hello|hey|good morning|good afternoon|good evening)[!.?\s]*", sanitized_content, re.IGNORECASE)
-        if greeting:
-            ai_result = {"reply": "Hello! How can I help you with your order or support request?", "confidence": 1.0, "proposed_action": None}
-        elif self.api_key:
-            try:
-                inquiry_context = sanitized_content
-                if conversation_history:
-                    safe_history, _, _ = pii_service.redact(conversation_history)
-                    inquiry_context = f"Previous conversation (context only):\n{safe_history}\n\nLatest customer message to answer:\n{sanitized_content}"
-                ai_result = await self._call_live_gemini(
-                    workspace_id, inquiry_context, customer, order, citations, intent
-                )
-                engine_mode = "gemini_live"
-            except Exception as e:
-                print(f"[AgentService] Gemini Live call failed ({e}). Using deterministic engine.")
-                ai_result = None
-
-        if not ai_result:
-            ai_result = self._deterministic_agent_reasoning(
-                sanitized_content, customer, order, citations, intent, sentiment, is_vip_churn_risk
-            )
-            engine_mode = "simulated"
-
-        confidence_score = ai_result["confidence"]
-        draft_reply = ai_result["reply"]
-        proposed_action_spec = ai_result.get("proposed_action")
-
-        # Step 7: Deterministic Backend Guardrails Verification
-        guardrail_passed = True
-        gated_action = None
-        action_status = "evaluated"
-
-        # Fetch workspace settings
         workspaces_col = get_collection("workspaces")
         ws = await workspaces_col.find_one({"_id": workspace_id})
         ws_settings = ws.get("settings", {}) if ws else {}
@@ -171,9 +230,81 @@ class AgentService:
         credit_cap = ws_settings.get("store_credit_max_cap", settings.STORE_CREDIT_MAX_CAP)
         auto_pilot_enabled = ws_settings.get("auto_pilot_enabled", True)
 
-        if proposed_action_spec and order:
+        ai_result = None
+        engine_mode = "simulated"
+        model_used: Optional[str] = None
+        fallback_reason: Optional[str] = None
+        greeting = re.fullmatch(r"\s*(hi|hello|hey|good morning|good afternoon|good evening)[!.?\s]*", sanitized_content, re.IGNORECASE)
+        if greeting:
+            ai_result = {"reply": "Hello! How can I help you with your order or support request?", "confidence": 1.0, "proposed_action": None}
+            engine_mode = "greeting"
+        elif self.api_key:
+            try:
+                inquiry_context = sanitized_content
+                if conversation_history:
+                    safe_history, _, _ = pii_service.redact(conversation_history)
+                    inquiry_context = f"Previous conversation (context only):\n{safe_history}\n\nLatest customer message to answer:\n{sanitized_content}"
+                ai_result, model_used = await self._call_live_gemini(
+                    workspace_id, inquiry_context, customer, order, citations, intent,
+                    preferred_model=ws_settings.get("gemini_model"),
+                    credit_cap=credit_cap,
+                    is_vip=is_vip,
+                )
+                engine_mode = "gemini_live"
+            except Exception as e:
+                fallback_reason = str(e)[:500]
+                print(f"[AgentService] Gemini Live call failed ({fallback_reason}). Using deterministic engine.")
+                ai_result = None
+        else:
+            fallback_reason = "GEMINI_API_KEY is not configured"
+
+        if not ai_result:
+            ai_result = self._deterministic_agent_reasoning(
+                sanitized_content, customer, order, citations, intent, sentiment, is_vip_churn_risk
+            )
+            engine_mode = "simulated"
+
+        confidence_score = float(ai_result["confidence"])
+        if is_vip_churn_risk:
+            confidence_score = min(confidence_score, 0.78)
+        draft_reply = ai_result["reply"]
+        proposed_action_spec = ai_result.get("proposed_action")
+
+        execution_steps.append(ExecutionStep(
+            step_name="response_generation",
+            status="success" if engine_mode != "simulated" else "warning",
+            details={
+                "engine_mode": engine_mode,
+                "model": model_used,
+                "fallback_reason": fallback_reason,
+                "raw_confidence": ai_result["confidence"],
+                "proposed_action": (proposed_action_spec or {}).get("action_type"),
+            }
+        ))
+
+        # Step 7: Deterministic Backend Guardrails Verification
+        guardrail_passed = True
+        gated_action = None
+        action_status = "evaluated"
+
+        force_review_reason: Optional[str] = None
+        if proposed_action_spec:
             action_type = proposed_action_spec.get("action_type")
-            params = proposed_action_spec.get("parameters", {})
+            params = dict(proposed_action_spec.get("parameters") or {})
+            if action_type == "escalate_ticket":
+                force_review_reason = params.get("reason") or "AI agent requested human escalation"
+                guardrail_notes.append(f"Escalation requested by AI agent: {force_review_reason}")
+                gated_action = ProposedAction(
+                    action_type=action_type, parameters=params,
+                    status="pending_approval", reason=force_review_reason,
+                )
+            elif not order:
+                force_review_reason = f"Proposed '{action_type}' has no verified order belonging to this customer"
+                guardrail_notes.append(force_review_reason)
+
+        if proposed_action_spec and order and not force_review_reason:
+            action_type = proposed_action_spec.get("action_type")
+            params = dict(proposed_action_spec.get("parameters") or {})
 
             if action_type == "update_shipping_address":
                 passed, reason = guardrail_service.validate_shipping_address_update(order, params.get("shipping_address", {}))
@@ -248,6 +379,14 @@ class AgentService:
                 "Offer personalized apology, review delay/defect, and consider up to $25 goodwill credit."
             )
             guardrail_notes.append("Routed to VIP / Critical Review Queue due to high LTV and negative sentiment.")
+
+        elif force_review_reason:
+            requires_approval = True
+            ticket_status = "needs_approval"
+            escalation_summary = guardrail_service.generate_escalation_summary(
+                customer, intent, force_review_reason,
+                "Review the conversation and decide on the appropriate resolution."
+            )
 
         elif not guardrail_passed or (gated_action and gated_action.status == "pending_approval"):
             requires_approval = True
@@ -339,7 +478,9 @@ class AgentService:
             "order": order,
             "customer": customer,
             "audit_trace_id": trace_id,
-            "engine_mode": engine_mode
+            "engine_mode": engine_mode,
+            "model": model_used,
+            "fallback_reason": fallback_reason,
         }
 
     def _classify_intent_and_sentiment(self, text: str, is_vip: bool, order: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -505,10 +646,16 @@ class AgentService:
         customer: Dict[str, Any],
         order: Optional[Dict[str, Any]],
         citations: List[PolicyCitation],
-        intent: str
-    ) -> Dict[str, Any]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        intent: str,
+        preferred_model: Optional[str] = None,
+        credit_cap: float = 50.0,
+        is_vip: bool = False,
+    ) -> Tuple[Dict[str, Any], str]:
+        """Call Gemini, falling back across models on quota, outage or bad output.
 
+        Returns (validated_result, model_name). Raises GeminiUnavailable when
+        every candidate model failed, so the caller can use the simulator.
+        """
         feedback_rows = await get_collection("edit_feedback").find(
             {"workspace_id": workspace_id, "action_decision": "edited_and_approved"}
         ).sort("created_at", -1).limit(3).to_list()
@@ -519,39 +666,99 @@ class AgentService:
 
         system_instruction = (
             "You are the SupportPilot AI customer support agent for an e-commerce brand. "
-            "Respond professionally, concisely, and cite official store policies where relevant. "
-            "Output only JSON with exactly: 'reply' (string), 'confidence' (number 0.0-1.0), "
-            "and 'proposed_action' (null or an object with action_type and parameters)."
+            "Respond professionally and concisely, address the customer by first name, and "
+            "ground every commitment in the store policies provided; cite a policy by its title "
+            "when you rely on it. Never invent order details, tracking numbers, prices or policies "
+            "that are not in the context.\n\n"
+            "Actions you may propose (proposed_action, or null when no action is needed):\n"
+            "- issue_store_credit: parameters.amount (USD) and parameters.reason. "
+            f"Never above ${credit_cap:.2f}.\n"
+            "- update_shipping_address: parameters.shipping_address with street, city, state, "
+            "zip_code, country taken from the customer's message. Only possible while the order "
+            "status is 'unfulfilled'.\n"
+            "- generate_rma_label: parameters.reason. Only for delivered orders within 30 days.\n"
+            "- escalate_ticket: parameters.reason. Use when a human must decide (legal threats, "
+            "cancellations, refunds to the original payment method, missing information).\n"
+            "Proposed actions are verified by backend guardrails and may need human approval, so "
+            "describe them as being processed, not as already completed.\n\n"
+            "confidence is your probability (0.0-1.0) that the reply fully and correctly resolves "
+            "the request using only the given context. Use below 0.8 when facts are missing, the "
+            "request is ambiguous, or the customer asks for something outside policy."
         )
 
-        citation_text = "\n".join([f"- [{c.title}]: {c.snippet}" for c in citations])
+        citation_text = "\n".join([f"- [{c.title}]: {c.snippet}" for c in citations]) or "- None retrieved"
+        if order:
+            items = ", ".join(
+                f"{i.get('quantity', 1)}x {i.get('name') or i.get('title') or i.get('product_name', 'item')}"
+                for i in (order.get("items") or []) if isinstance(i, dict)
+            ) or "not listed"
+            order_text = (
+                f"{order.get('order_number')} | status: {order.get('status')} | total: ${order.get('total_amount', 0)} | "
+                f"carrier: {order.get('carrier', 'n/a')} | tracking: {order.get('tracking_number', 'n/a')} | "
+                f"estimated delivery: {order.get('estimated_delivery', 'n/a')} | items: {items} | "
+                f"credits already issued: ${order.get('credits_issued', 0)}"
+            )
+        else:
+            order_text = "No order on file for this customer matches the request."
         prompt = (
-            f"Customer: {customer.get('name')} (Total Spent: ${customer.get('total_spent', 0)})\n"
-            f"Order Context: {order.get('order_number') if order else 'None'} (Status: {order.get('status') if order else 'None'})\n"
+            f"Customer: {customer.get('name')} (Total Spent: ${customer.get('total_spent', 0)}"
+            f"{', VIP' if is_vip else ''})\n"
+            f"Detected intent: {intent}\n"
+            f"Order: {order_text}\n"
             f"Relevant Policies:\n{citation_text}\n\n"
             f"Recent human-approved edits to learn tone from:\n{feedback_examples}\n\n"
-            f"Customer Inquiry: {sanitized_content}\n\n"
-            f"Return valid JSON only matching the schema."
+            f"Customer Inquiry: {sanitized_content}"
         )
 
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "systemInstruction": {"parts": [{"text": system_instruction}]},
             "generationConfig": {
                 "responseMimeType": "application/json",
-                "temperature": 0.2
-            }
+                "responseSchema": GEMINI_RESPONSE_SCHEMA,
+                "temperature": 0.2,
+            },
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=payload)
-            if resp.status_code == 200:
-                data = resp.json()
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                validated = GeminiAgentResult.model_validate_json(text)
-                return validated.model_dump()
-            else:
-                raise Exception(f"Gemini API returned status {resp.status_code}: {resp.text}")
+        errors: List[str] = []
+        timeout = httpx.Timeout(settings.GEMINI_TIMEOUT_SECONDS, connect=10.0)
+        # The key travels in a header, never in the URL, so it cannot leak into logs.
+        headers = {"x-goog-api-key": self.api_key}
+        async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+            for model in self.candidate_models(preferred_model):
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                try:
+                    resp = await client.post(url, json=payload)
+                except httpx.HTTPError as exc:
+                    errors.append(f"{model}: {type(exc).__name__}")
+                    continue
+
+                if resp.status_code != 200:
+                    errors.append(f"{model}: {_short_error(resp)}")
+                    if resp.status_code in _RETRYABLE_STATUSES:
+                        continue
+                    break  # 400/401/403 = bad request or key; other models will fail too
+
+                try:
+                    data = resp.json()
+                    parts = data["candidates"][0]["content"]["parts"]
+                    text = "".join(p.get("text", "") for p in parts if not p.get("thought"))
+                    raw = _strip_nulls(json.loads(text))
+                    if isinstance(raw.get("proposed_action"), dict):
+                        raw["proposed_action"].setdefault("parameters", {})
+                    validated = GeminiAgentResult.model_validate(raw)
+                except Exception as exc:
+                    errors.append(f"{model}: invalid structured output ({type(exc).__name__})")
+                    continue
+
+                self.last_live_model = model
+                self.last_live_error = None
+                return validated.model_dump(), model
+
+        summary = "; ".join(errors) or "no Gemini models configured"
+        self.last_live_error = summary
+        self.last_live_error_at = datetime.utcnow()
+        raise GeminiUnavailable(f"All Gemini models failed: {summary}")
 
     async def _execute_approved_action(
         self,

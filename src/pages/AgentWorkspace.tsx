@@ -30,7 +30,7 @@ export const AgentWorkspace: React.FC = () => {
   const [playgroundText, setPlaygroundText] = useState(
     'My order ORD-8820 is delayed. My phone is 555-234-5678 and card was 4111-2222-3333-4444. I want my money back or a compensation credit immediately!'
   );
-  const [customerId, setCustomerId] = useState('cust_eleanor');
+  const [customerId, setCustomerId] = useState('cust_marcus');
   const [running, setRunning] = useState(false);
   const [liveResult, setLiveResult] = useState<any>(null);
 
@@ -79,10 +79,15 @@ export const AgentWorkspace: React.FC = () => {
               <h2 className="text-base font-bold text-neutral-900">
                 AI Automation Workspace
               </h2>
-              <Badge variant="success" size="sm">
-                Active
+              <Badge variant={agentStatus?.api_key_configured ? (agentStatus?.last_live_error ? 'warning' : 'success') : 'neutral'} size="sm">
+                {agentStatus?.api_key_configured
+                  ? (agentStatus?.last_live_error ? 'Gemini degraded' : `Gemini live • ${agentStatus?.model}`)
+                  : 'Simulator only (no API key)'}
               </Badge>
             </div>
+            {agentStatus?.last_live_error && (
+              <p className="text-[11px] text-amber-700 mt-1 max-w-xl">Last Gemini error: {agentStatus.last_live_error}</p>
+            )}
             <p className="text-xs text-neutral-500 mt-1 max-w-xl">
               Auto-Pilot Threshold: <span className="font-mono text-neutral-800 font-semibold">{Math.round((agentStatus?.confidence_threshold || 0.90) * 100)}%</span> • Store Credit Cap: <span className="font-mono text-neutral-800 font-semibold">${agentStatus?.store_credit_max_cap || 50}.00</span>
             </p>
@@ -186,10 +191,25 @@ export const AgentWorkspace: React.FC = () => {
               <h4 className="text-xs font-semibold uppercase tracking-wider text-neutral-800">
                 Observable 6-Stage Execution Trace
               </h4>
-              <Badge variant={liveResult.requires_approval ? 'warning' : 'success'}>
-                Decision: {liveResult.requires_approval ? 'Needs Human Approval' : 'Auto-Pilot Deflected'}
-              </Badge>
+              <div className="flex items-center gap-2">
+                <Badge variant={liveResult.engine_mode === 'simulated' ? 'warning' : 'success'}>
+                  Engine: {liveResult.engine_mode === 'gemini_live'
+                    ? `Gemini (${liveResult.model})`
+                    : liveResult.engine_mode === 'greeting' ? 'Greeting shortcut' : 'Fallback simulator'}
+                </Badge>
+                <Badge variant={liveResult.requires_approval ? 'warning' : 'success'}>
+                  Decision: {liveResult.requires_approval ? 'Needs Human Approval' : 'Auto-Pilot Deflected'}
+                </Badge>
+              </div>
             </div>
+            {liveResult.engine_mode === 'simulated' && liveResult.fallback_reason && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-900 flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  Live AI was unavailable, so this reply came from the rule-based simulator. Reason: {liveResult.fallback_reason}
+                </span>
+              </div>
+            )}
 
             {/* 6 Stage Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -253,7 +273,7 @@ export const AgentWorkspace: React.FC = () => {
                   {Math.round(liveResult.confidence_score * 100)}%
                 </span>
                 <span className="text-[11px] text-neutral-500 block">
-                  Threshold: 90% • {liveResult.confidence_score >= 0.90 ? 'Meets Threshold' : 'Below Threshold'}
+                  Threshold: {Math.round((agentStatus?.confidence_threshold ?? 0.9) * 100)}% • {liveResult.confidence_score >= (agentStatus?.confidence_threshold ?? 0.9) ? 'Meets Threshold' : 'Below Threshold'}
                 </span>
               </div>
 

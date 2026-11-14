@@ -49,7 +49,7 @@ async def list_tickets(
         s = search.lower()
         tickets = [
             t for t in tickets
-            if s in t.get("title", "").lower() or s in t.get("intent", "").lower() or s in t.get("order_id", "").lower()
+            if any(s in str(t.get(field) or "").lower() for field in ("title", "intent", "order_id", "_id"))
         ]
 
     # Enrich with customer names for clean display
@@ -316,6 +316,15 @@ async def update_ticket(
     workspace_id: str = Depends(get_current_workspace_id)
 ):
     tickets_col = get_collection("tickets")
+    # Only workflow fields are editable; identity, ownership and AI audit
+    # fields (workspace_id, customer_id, _id, ...) can never be rewritten.
+    editable = {"status", "priority", "assigned_agent_id", "tags", "title", "urgency"}
+    rejected = sorted(set(update_data) - editable)
+    if rejected:
+        raise HTTPException(status_code=422, detail=f"Fields cannot be updated: {', '.join(rejected)}")
+    if "status" in update_data and update_data["status"] not in {"open", "needs_approval", "resolved", "escalated", "closed"}:
+        raise HTTPException(status_code=422, detail="Invalid ticket status")
+    update_data = dict(update_data)
     update_data["updated_at"] = datetime.utcnow()
     res = await tickets_col.update_one(
         {"_id": ticket_id, "workspace_id": workspace_id},

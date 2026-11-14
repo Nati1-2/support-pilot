@@ -20,12 +20,17 @@ async def get_agent_status(workspace_id: str = Depends(get_current_workspace_id)
     ws_settings = ws.get("settings", {}) if ws else {}
 
     is_live = bool(settings.GEMINI_API_KEY)
+    preferred = ws_settings.get("gemini_model", settings.GEMINI_MODEL)
 
     return {
         "mode": "live_gemini" if is_live else "simulated_gemini",
         "mode_label": "AI Automation Assistant",
         "api_key_configured": is_live,
-        "model": ws_settings.get("gemini_model", settings.GEMINI_MODEL),
+        "model": preferred,
+        "model_chain": agent_service.candidate_models(preferred) if is_live else [],
+        "last_live_model": agent_service.last_live_model,
+        "last_live_error": agent_service.last_live_error,
+        "last_live_error_at": agent_service.last_live_error_at,
         "confidence_threshold": ws_settings.get("confidence_threshold", settings.CONFIDENCE_THRESHOLD),
         "store_credit_max_cap": ws_settings.get("store_credit_max_cap", settings.STORE_CREDIT_MAX_CAP),
         "auto_pilot_enabled": ws_settings.get("auto_pilot_enabled", True),

@@ -6,6 +6,13 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { useAuth } from '../context/AuthContext';
 
+const GEMINI_MODELS = [
+  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Recommended — balanced quality & speed)' },
+  { value: 'gemini-flash-lite-latest', label: 'Gemini Flash-Lite (Fastest — highest free-tier quota)' },
+  { value: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (Fast, newer generation)' },
+  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Deep reasoning — slower, lower quota)' },
+];
+
 export const Settings: React.FC = () => {
   const { user } = useAuth();
   const canEdit = user?.role === 'admin';
@@ -14,7 +21,7 @@ export const Settings: React.FC = () => {
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.90);
   const [storeCreditCap, setStoreCreditCap] = useState(50.0);
   const [autoPilotEnabled, setAutoPilotEnabled] = useState(true);
-  const [geminiModel, setGeminiModel] = useState('gemini-2.0-flash');
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
@@ -27,7 +34,7 @@ export const Settings: React.FC = () => {
       setConfidenceThreshold(data.settings.confidence_threshold);
       setStoreCreditCap(data.settings.store_credit_max_cap);
       setAutoPilotEnabled(data.settings.auto_pilot_enabled);
-      setGeminiModel(data.settings.gemini_model || 'gemini-2.0-flash');
+      setGeminiModel(data.settings.gemini_model || 'gemini-2.5-flash');
     } catch (e) {
       console.warn(e);
     }
@@ -137,9 +144,12 @@ export const Settings: React.FC = () => {
                 onChange={(e) => setGeminiModel(e.target.value)}
                 className="w-full text-xs p-2.5 bg-neutral-50 border border-neutral-200 rounded-lg focus:outline-none focus:bg-white cursor-pointer"
               >
-                <option value="gemini-2.0-flash">Gemini 2.0 Flash (Recommended — Lowest latency & structured tools)</option>
-                <option value="gemini-1.5-pro">Gemini 1.5 Pro (Deep reasoning & complex multi-policy RAG)</option>
-                <option value="gemini-1.5-flash">Gemini 1.5 Flash (Lightweight fast classification)</option>
+                {!GEMINI_MODELS.some((m) => m.value === geminiModel) && (
+                  <option value={geminiModel}>{geminiModel} (no longer available — falls back automatically)</option>
+                )}
+                {GEMINI_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
               </select>
             </div>
 

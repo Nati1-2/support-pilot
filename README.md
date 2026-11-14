@@ -92,7 +92,7 @@ Engineered with the clarity, typography, and aesthetic restraint of **Linear**, 
 - **Frontend**: React 18, TypeScript, Tailwind CSS, Lucide React, Vite.
 - **Backend**: Python 3.12, FastAPI, Pydantic v2, PyJWT, HTTPX.
 - **Database**: MongoDB Atlas (`motor` / `pymongo`), with automatic zero-configuration fallback to local workspace-isolated `AsyncMockMotorDatabase` persisted to `backend/data/store.json`.
-- **AI Engine**: Google Gemini API (`gemini-2.0-flash`, `gemini-1.5-pro`) with structured outputs and fallback to the Deterministic Guardrail Simulation Engine.
+- **AI Engine**: Google Gemini API (`gemini-2.5-flash` by default) with schema-constrained structured outputs, an automatic model fallback chain (`GEMINI_FALLBACK_MODELS`, used when a model is rate limited, retired or down), and a final fallback to the Deterministic Guardrail Simulation Engine. The Agent Workspace shows which engine and model produced each reply and why a fallback happened.
 
 ---
 

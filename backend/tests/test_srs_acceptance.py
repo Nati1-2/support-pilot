@@ -172,6 +172,63 @@ async def run_tests():
             pass
         checkpoint("strict Gemini schema")
 
+        # Gemini model fallback: a rate-limited primary model must fall through
+        # to the next model; total failure must fall back to the simulator.
+        import httpx
+        import json as _json
+        from backend.app.services import agent_service as agent_module
+
+        service = agent_module.agent_service
+        original_client, original_key = httpx.AsyncClient, service.api_key
+        calls = []
+
+        def make_handler(fail_all: bool):
+            def handler(request: httpx.Request) -> httpx.Response:
+                model = request.url.path.split("/models/")[1].split(":")[0]
+                calls.append(model)
+                assert "key=" not in str(request.url), "API key must not be sent in the URL"
+                assert request.headers.get("x-goog-api-key") == "test-key"
+                if fail_all or len(calls) == 1:
+                    return httpx.Response(429, json={"error": {"status": "RESOURCE_EXHAUSTED", "message": "quota"}})
+                body = {"reply": "Hello Olivia, your order is being packed.", "confidence": 0.93, "proposed_action": None}
+                return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": _json.dumps(body)}]}}]})
+            return handler
+
+        def patched_client(fail_all: bool):
+            return lambda **kwargs: original_client(transport=httpx.MockTransport(make_handler(fail_all)), **kwargs)
+
+        try:
+            service.api_key = "test-key"
+            agent_module.httpx.AsyncClient = patched_client(False)
+            live = await service.process_inquiry(settings.DEFAULT_WORKSPACE_ID, "cust_olivia", "What is the status of my order?")
+            assert live["engine_mode"] == "gemini_live", live["fallback_reason"]
+            assert len(calls) == 2 and live["model"] == calls[1] != calls[0]
+
+            calls.clear()
+            agent_module.httpx.AsyncClient = patched_client(True)
+            fallback = await service.process_inquiry(settings.DEFAULT_WORKSPACE_ID, "cust_olivia", "What is the status of my order?")
+            assert fallback["engine_mode"] == "simulated"
+            assert "RESOURCE_EXHAUSTED" in fallback["fallback_reason"]
+            assert len(calls) == len(service.candidate_models()) >= 2
+        finally:
+            agent_module.httpx.AsyncClient = original_client
+            service.api_key = original_key
+        checkpoint("Gemini model fallback chain")
+
+        # ORD-8820 belongs to another customer and must never be used for Olivia.
+        isolated = await service.process_inquiry(settings.DEFAULT_WORKSPACE_ID, "cust_olivia", "Where is order ORD-8820?")
+        assert (isolated["order"] or {}).get("order_number") != "ORD-8820"
+        assert isolated["order"] is None or isolated["order"]["customer_id"] == "cust_olivia"
+        checkpoint("agent order lookup is customer-scoped")
+
+        tickets_list = (await client.get("/api/tickets?search=ord", headers=agent))
+        assert tickets_list.status_code == 200
+        some_ticket = tickets_list.json()[0]["id"] if tickets_list.json() else None
+        if some_ticket:
+            bad_patch = await client.patch(f"/api/tickets/{some_ticket}", headers=agent, json={"workspace_id": "other"})
+            assert bad_patch.status_code == 422
+        checkpoint("ticket search and protected PATCH fields")
+
         registered_email = f"registered-{uuid.uuid4().hex[:8]}@example.com"
         registered = await client.post(
             "/api/auth/register",

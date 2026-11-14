@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     # Gemini AI
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    # Tried in order when the primary model is rate limited, retired or down.
+    # Free-tier quotas are counted per model, so lite models add headroom.
+    GEMINI_FALLBACK_MODELS: str = os.getenv(
+        "GEMINI_FALLBACK_MODELS", "gemini-flash-lite-latest,gemini-3.1-flash-lite"
+    )
+    GEMINI_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "20"))
     DUMMYJSON_ENABLED: bool = os.getenv("DUMMYJSON_ENABLED", "true").lower() in {"1", "true", "yes"}
     DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() in {"1", "true", "yes"}
 
@@ -37,6 +43,10 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "allow"
+
+    @property
+    def gemini_fallback_models(self) -> list[str]:
+        return [m.strip() for m in self.GEMINI_FALLBACK_MODELS.split(",") if m.strip()]
 
     @property
     def cors_origins(self) -> list[str]:

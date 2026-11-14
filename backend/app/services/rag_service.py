@@ -5,22 +5,50 @@ from backend.app.database import get_collection
 from backend.app.models.ticket import PolicyCitation
 
 class RAGService:
+    STOP_WORDS = {
+        "the", "and", "for", "that", "this", "with", "from", "your", "have", "are", "can", "will",
+        "our", "you", "order", "orders", "where", "what", "when", "how", "why", "please", "really",
+        "would", "could", "like", "want", "need", "just", "it's", "i'm", "been", "was", "not", "but",
+        "all", "any", "get", "has", "had", "its", "they", "them", "there", "here", "about", "into",
+        "customer", "store", "policy", "general", "support", "inquiry",
+    }
+
+    # Detected intent -> policy tag that should be preferred for grounding.
+    INTENT_TAGS = {
+        "shipping_delay": "shipping_delay",
+        "address_change": "address_change",
+        "return_rma": "returns",
+        "store_credit": "store_credit",
+        "vip_churn_risk": "vip",
+        "payment_failed": "payment",
+    }
+
+    @staticmethod
+    def _stem(token: str) -> str:
+        for suffix in ("ing", "ed", "es", "s"):
+            if len(token) > len(suffix) + 3 and token.endswith(suffix):
+                return token[: -len(suffix)]
+        return token
+
     def _tokenize(self, text: str) -> List[str]:
         if not text:
             return []
-        text = text.lower()
-        tokens = re.findall(r'\b[a-z0-9_-]{3,}\b', text)
-        stop_words = {"the", "and", "for", "that", "this", "with", "from", "your", "have", "are", "can", "will", "our", "you"}
-        return [t for t in tokens if t not in stop_words]
+        tokens: List[str] = []
+        for raw in re.findall(r"[a-z0-9_'-]{3,}", text.lower()):
+            parts = [raw] + [p for p in re.split(r"[_-]", raw) if len(p) >= 3]
+            for part in parts:
+                part = part.strip("'")
+                if len(part) >= 3 and part not in self.STOP_WORDS and not part.isdigit():
+                    tokens.append(self._stem(part))
+        return list(dict.fromkeys(tokens))
 
     def _calculate_score(self, query_tokens: List[str], doc_tokens: List[str], title_tokens: List[str], tags: List[str]) -> float:
         if not query_tokens or not doc_tokens:
             return 0.0
 
-        # Word frequency in doc
         doc_set = set(doc_tokens)
         title_set = set(title_tokens)
-        tag_set = set([t.lower() for t in tags])
+        tag_set = set(self._tokenize(" ".join(tags)))
 
         score = 0.0
         for token in query_tokens:
@@ -31,8 +59,9 @@ class RAGService:
             if token in doc_set:
                 score += 1.0
 
-        # Normalize score
-        normalized = score / (len(query_tokens) * 3.0 + 1e-5)
+        # Saturating normalization: long customer messages are not penalized
+        # for words that simply do not appear in any policy.
+        normalized = score / (score + 8.0)
         return min(round(normalized, 3), 0.99)
 
     def _extract_snippet(self, content: str, query_tokens: List[str], max_len: int = 240) -> str:
@@ -55,7 +84,10 @@ class RAGService:
             return best_para[:max_len].rsplit(' ', 1)[0] + '...'
         return best_para
 
-    async def search_policies(self, workspace_id: str, query: str, limit: int = 3, threshold: float = 0.15) -> List[PolicyCitation]:
+    async def search_policies(
+        self, workspace_id: str, query: str, limit: int = 3, threshold: float = 0.3,
+        intent: Optional[str] = None,
+    ) -> List[PolicyCitation]:
         col = get_collection("policy_sections")
         cursor = col.find({"workspace_id": workspace_id, "is_active": True})
         sections = await cursor.to_list()
@@ -69,6 +101,9 @@ class RAGService:
             tags = sec.get("tags", [])
 
             score = self._calculate_score(query_tokens, doc_tokens, title_tokens, tags)
+            preferred_tag = self.INTENT_TAGS.get(intent or "")
+            if preferred_tag and preferred_tag in tags:
+                score = min(0.99, round(score + 0.35, 3))
             if score >= threshold:
                 snippet = self._extract_snippet(sec.get("content", ""), query_tokens)
                 scored_sections.append({
@@ -81,24 +116,32 @@ class RAGService:
         # Sort by relevance
         scored_sections.sort(key=lambda x: x["score"], reverse=True)
         if not scored_sections and sections:
+            # Only fall back to a policy that matches the intent or an explicit
+            # topic word; an unrelated citation is worse than none.
             query_lower = query.lower()
-            category = "general"
-            if any(word in query_lower for word in ("return", "rma", "refund", "exchange")):
-                category = "returns"
-            elif any(word in query_lower for word in ("credit", "compensation", "payment")):
-                category = "store_credit"
-            elif any(word in query_lower for word in ("vip", "churn", "escalat")):
-                category = "escalations"
-            elif any(word in query_lower for word in ("ship", "delay", "address", "tracking", "deliver")):
-                category = "shipping"
-
-            fallback = next((s for s in sections if s.get("category") == category), sections[0])
-            scored_sections.append({
-                "section_id": str(fallback.get("_id", fallback.get("id"))),
-                "title": fallback.get("title", "Store Policy"),
-                "score": 0.1,
-                "snippet": self._extract_snippet(fallback.get("content", ""), query_tokens),
-            })
+            wanted_tag = self.INTENT_TAGS.get(intent or "")
+            if not wanted_tag:
+                for words, tag in (
+                    (("return", "rma", "refund", "exchange"), "returns"),
+                    (("delay", "late", "tracking", "where is"), "shipping_delay"),
+                    (("address",), "address_change"),
+                    (("credit", "compensation"), "store_credit"),
+                    (("payment", "card declined"), "payment"),
+                ):
+                    if any(w in query_lower for w in words):
+                        wanted_tag = tag
+                        break
+            fallback = next((s for s in sections if wanted_tag and wanted_tag in s.get("tags", [])), None)
+            if fallback:
+                scored_sections.append({
+                    "section_id": str(fallback.get("_id", fallback.get("id"))),
+                    "title": fallback.get("title", "Store Policy"),
+                    "score": 0.3,
+                    "snippet": self._extract_snippet(fallback.get("content", ""), query_tokens),
+                })
+        if scored_sections:
+            best = scored_sections[0]["score"]
+            scored_sections = [s for s in scored_sections if s["score"] >= best * 0.5]
         top = scored_sections[:limit]
 
         return [

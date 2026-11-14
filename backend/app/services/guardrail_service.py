@@ -16,10 +16,10 @@ class GuardrailService:
             )
 
         # Validate required address fields
-        street = new_address.get("street", "").strip()
-        city = new_address.get("city", "").strip()
-        state = new_address.get("state", "").strip()
-        zip_code = new_address.get("zip_code", "").strip()
+        street = str((new_address or {}).get("street") or "").strip()
+        city = str((new_address or {}).get("city") or "").strip()
+        state = str((new_address or {}).get("state") or "").strip()
+        zip_code = str((new_address or {}).get("zip_code") or "").strip()
 
         if not street or not city or not state or not zip_code:
             return (
