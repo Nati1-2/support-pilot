@@ -132,7 +132,7 @@ This repository is one Vercel project:
 
 - Vite builds the frontend into `dist/` and Vercel serves it at `/`.
 - `api/index.py` exposes the FastAPI backend as one Python function at `/api/*`.
-- `vercel.json` keeps API rewrites ahead of the React SPA fallback and registers the hourly follow-up cron.
+- `vercel.json` keeps API rewrites ahead of the React SPA fallback and registers the daily follow-up cron supported by Vercel Hobby.
 - The browser uses the same-origin `/api` URL, so no separate frontend URL or CORS environment variable is required.
 
 ### Environment
