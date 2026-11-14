@@ -89,6 +89,11 @@ async def ensure_initialized():
 
 @app.on_event("startup")
 async def startup_event():
+    # Vercel initializes lazily so the health endpoint can report incomplete
+    # configuration instead of the entire function failing before a response.
+    if os.getenv("VERCEL"):
+        print("[Startup] Vercel runtime will initialize on the first API request.")
+        return
     print("[Startup] Initializing database and services...")
     await ensure_initialized()
     print("[Startup] SupportPilot AI backend initialized successfully.")
@@ -98,8 +103,19 @@ async def add_process_time_header(request: Request, call_next):
     rate_limited = _auth_rate_limit_response(request)
     if rate_limited:
         return rate_limited
-    # Ensure database connection on serverless cold starts
-    await ensure_initialized()
+    # Ensure database connection on serverless cold starts. Preserve the
+    # fail-closed security policy while returning an actionable API response.
+    if request.url.path != "/api/health":
+        try:
+            await ensure_initialized()
+        except RuntimeError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": "Server configuration is incomplete",
+                    "missing_environment_variables": settings.vercel_runtime_issues(),
+                },
+            )
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
@@ -140,6 +156,16 @@ async def api_root():
 
 @app.get("/api/health")
 async def health_check():
+    configuration_issues = settings.vercel_runtime_issues()
+    if configuration_issues:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "configuration_required",
+                "missing_environment_variables": configuration_issues,
+            },
+        )
+    await ensure_initialized()
     return {
         "status": "healthy",
         "version": settings.VERSION,

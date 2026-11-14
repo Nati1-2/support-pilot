@@ -1,4 +1,5 @@
 import asyncio
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -237,6 +238,30 @@ async def run_tests():
         )
         assert "access-control-allow-origin" not in blocked_origin.headers
         checkpoint("restricted CORS")
+
+        original_vercel = os.environ.get("VERCEL")
+        original_values = {
+            name: getattr(settings, name)
+            for name in ("MONGODB_URI", "JWT_SECRET", "WEBHOOK_SECRET", "CRON_SECRET")
+        }
+        os.environ["VERCEL"] = "1"
+        settings.MONGODB_URI = ""
+        settings.JWT_SECRET = "short"
+        settings.WEBHOOK_SECRET = "short"
+        settings.CRON_SECRET = "short"
+        try:
+            health = await client.get("/api/health")
+            assert health.status_code == 503
+            missing = set(health.json()["missing_environment_variables"])
+            assert missing == {"MONGODB_URI", "JWT_SECRET", "WEBHOOK_SECRET", "CRON_SECRET"}
+        finally:
+            for name, value in original_values.items():
+                setattr(settings, name, value)
+            if original_vercel is None:
+                os.environ.pop("VERCEL", None)
+            else:
+                os.environ["VERCEL"] = original_vercel
+        checkpoint("actionable Vercel configuration error")
 
     print("ALL SRS ACCEPTANCE TESTS PASSED")
 

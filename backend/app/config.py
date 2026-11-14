@@ -42,10 +42,10 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
-    def validate_vercel_runtime(self) -> None:
-        """Refuse to start an insecure or non-persistent Vercel deployment."""
+    def vercel_runtime_issues(self) -> list[str]:
+        """Return missing production settings without exposing their values."""
         if not os.getenv("VERCEL"):
-            return
+            return []
 
         defaults = {
             "JWT_SECRET": "supportpilot_jwt_super_secret_key_v2_2026",
@@ -67,9 +67,14 @@ class Settings(BaseSettings):
             or "USERNAME:PASSWORD@HOST" in self.MONGODB_URI
         ):
             invalid.append("MONGODB_URI")
+        return sorted(set(invalid))
+
+    def validate_vercel_runtime(self) -> None:
+        """Refuse to start an insecure or non-persistent Vercel deployment."""
+        invalid = self.vercel_runtime_issues()
         if invalid:
             raise RuntimeError(
-                "Missing secure Vercel environment variables: " + ", ".join(sorted(invalid))
+                "Missing secure Vercel environment variables: " + ", ".join(invalid)
             )
 
 settings = Settings()
